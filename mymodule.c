@@ -2,8 +2,38 @@
 #include <linux/init.h>
 #include <linux/mod_devicetable.h>
 #include <linux/serdev.h>
+#include <linux/proc_fs.h>
 
 MODULE_LICENSE("GPL");
+
+//inicialização do ring buffer
+static char global_buffer[255];
+static int global_buffer_head = 0;
+static int global_buffer_size = 0;
+
+//arquivo proc que vai ser usado para ler o buffer
+static struct proc_dir_entry *proc_file;
+
+//quando o usuário tentar ler do arquivo proc, exemplo: "cat /proc/pi-uart-data",
+//essa função vai ser chamada, ela simplismente retorna todo 
+//o buffer na primeira vez que for chamada e depois retorna o valor 0
+static ssize_t proc_read(struct file *file_pointer, char *user_buffer, size_t count, loff_t *offset) {
+	printk("file /proc/pi-uart-data - read was called!\n");
+
+	if (*offset >= global_buffer_size || copy_to_user(user_buffer, global_buffer, global_buffer_size)) {
+		printk("file /proc/pi-uart-data - copy_to_user ended\n");
+		return 0;
+	} else {
+		*offset += global_buffer_size;
+	}
+
+	return global_buffer_size;
+}
+
+//declaração das operações no arquivo proc
+static struct proc_ops pi_uart_proc_fops = {
+	.proc_read = proc_read
+};
 
 static int probe(struct serdev_device *serdev);
 static void remove(struct serdev_device *serdev);
@@ -29,9 +59,33 @@ static struct serdev_device_driver mymodule_driver = {
 	}
 };
 
-//função recebe um char e printa ele no log do kernel
+//função que recebe os bytes por UART e salva o último byte recebido no buffer
+//quando o buffer estiver cheio a função vai voltar o inicio e começar a
+//sobreescrever os dados que estavam no inicio
 static int receive_buf(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {
+	//pega o último char do buffer recebido
+	char *last_char_ptr = buffer + size - 1;
+	char last_char = (char)(*last_char_ptr);
+
 	printk("Received %ld bytes with \"%s\"\n", size, buffer);
+
+	//volta o ponteiro de escrita para o início do buffer global
+	//se o tamanho máximo ja tiver sido atingido
+	if (global_buffer_head >= 255) {
+		global_buffer_head = 0;
+	}
+
+	//escreve onde o ponteiro de escrita está apontando no buffer global
+	global_buffer[global_buffer_head] = last_char;
+
+	//só incrementa o valor do tamanho salvo no buffer global se o ponteiro
+	//não tiver voltado para o começo ainda
+	if (global_buffer_size == global_buffer_head) {
+		global_buffer_size++;
+	}
+
+	//incrementa o ponteiro de escrita para a próxima vez que essa função for chamada
+	global_buffer_head++;
 
 	return size;
 }
@@ -45,6 +99,13 @@ static int probe(struct serdev_device *serdev) {
 	int status;
 
 	printk("now im in the probe function!\n");
+
+	//cria a proc file no path /proc/pi-uart-data
+	proc_file = proc_create("pi-uart-data", 0666, NULL, &pi_uart_proc_fops);
+	if(proc_file == NULL) {
+		printk("pi_uart - Error creating /proc/pi-uart-data\n");
+		return -ENOMEM;
+	}
 
 	//registra a operação de receber dados
 	serdev_device_set_client_ops(serdev, &ops);
@@ -73,6 +134,9 @@ static int probe(struct serdev_device *serdev) {
 //Essa função vai ser chamada quando o serdev for removido (na função my_exit)
 static void remove(struct serdev_device *serdev) {
 	printk("now im in the remove function!\n");
+
+	//apaga o arquivo /proc/pi-uart-data
+	proc_remove(proc_file);
 
 	//mata o serdev
 	serdev_device_close(serdev);
