@@ -5,8 +5,8 @@ all: module dt
 
 module:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
-dt: mymodule_overlay.dts
-	dtc -@ -I dts -O dtb -o mymodule_overlay.dtbo mymodule_overlay.dts
+dt: pi_uart_overlay.dts
+	dtc -@ -I dts -O dtb -o pi_uart_overlay.dtbo pi_uart_overlay.dts
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
-	rm -rf mymodule_overlay.dtbo
+	rm -rf pi_uart_overlay.dtbo
